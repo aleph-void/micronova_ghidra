@@ -1,8 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- See Relax specification: Ghidra/Framework/SoftwareModeling/data/languages/processor_spec.rxg -->
-
+<!-- microNOVA. Addresses are 16-bit word addresses (15 bits used). -->
 <processor_spec>
   <programcounter register="PC"/>
-  
+  <register_data>
+    <register name="MASK"/>
+  </register_data>
+  <default_symbols>
+    <symbol name="INT_RETURN_PC" address="ram:0x0000"/>
+    <symbol name="IO_INT_VECTOR" address="ram:0x0001"/>
+    <symbol name="RTC_INT_VECTOR" address="ram:0x0002"/>
+    <symbol name="STACK_FAULT_VECTOR" address="ram:0x0003"/>
+    <symbol name="AUTOINC_20" address="ram:0x0010"/>
+    <symbol name="AUTOINC_21" address="ram:0x0011"/>
+    <symbol name="AUTOINC_22" address="ram:0x0012"/>
+    <symbol name="AUTOINC_23" address="ram:0x0013"/>
+    <symbol name="AUTOINC_24" address="ram:0x0014"/>
+    <symbol name="AUTOINC_25" address="ram:0x0015"/>
+    <symbol name="AUTOINC_26" address="ram:0x0016"/>
+    <symbol name="AUTOINC_27" address="ram:0x0017"/>
+    <symbol name="AUTODEC_30" address="ram:0x0018"/>
+    <symbol name="AUTODEC_31" address="ram:0x0019"/>
+    <symbol name="AUTODEC_32" address="ram:0x001a"/>
+    <symbol name="AUTODEC_33" address="ram:0x001b"/>
+    <symbol name="AUTODEC_34" address="ram:0x001c"/>
+    <symbol name="AUTODEC_35" address="ram:0x001d"/>
+    <symbol name="AUTODEC_36" address="ram:0x001e"/>
+    <symbol name="AUTODEC_37" address="ram:0x001f"/>
+    <symbol name="TRAP_RETURN" address="ram:0x0026"/>
+    <symbol name="TRAP_VECTOR" address="ram:0x0027"/>
+    <symbol name="CONSOLE_SWITCHES" address="ram:0x7f7f"/>
+  </default_symbols>
 </processor_spec>
