@@ -1,48 +1,39 @@
 # sleigh specification file for Data General Micronova Processor
+#
+# Original module by Peter Kooiman (https://github.com/pkooiman/micronova_ghidra).
+# Instruction set reworked for Ghidra-Rare against the microNOVA Programmer's Reference
+# (DG 015-000050-00, 1976) and MAME's Nova disassembler; see CREDITS.md and GHIDRA-RARE.md.
+#
+# The microNOVA (mN601/mN602) runs the Data General Nova instruction set with 15-bit word
+# addresses. The "ram" space is word addressed: one Ghidra address is one 16-bit word.
 
 define endian=big;
 define alignment=2;
 
-define space ram     type=ram_space      size=2  default wordsize=2;
-define space register type=register_space size=1;
+define space ram      type=ram_space      size=2  default wordsize=2;
+define space register type=register_space size=2;
 
-define register offset=0x00 size=2 [AC0 AC1 AC2 AC3];
-define register offset=0x40 size=2 [SP FP PC SHIFTER];
-define register offset=0x60 size=2 [EFFADDRESS];
-define register offset=0x80 size=1   [statusreg iobusy iodone intflag];
-#define register offset=0xC0 size=4   [contextreg];
+# Accumulators, program counter, stack pointer, frame pointer
+define register offset=0x00 size=2 [ AC0 AC1 AC2 AC3 ];
+define register offset=0x10 size=2 [ PC SP FP MASK ];
+# Carry bit, Interrupt On flag
+define register offset=0x20 size=1 [ C ION ];
 
-define bitrange cf=statusreg[0,1];
-define bitrange shiftercarry=statusreg[1,1];
-
-#define context contextreg
-	#autoinc = (0,1)
-	#autodec = (1,1)
-#;
-	
-define pcodeop get_io_busy;
-define pcodeop get_io_done;
-define pcodeop start_device;
-define pcodeop idle_device;
-define pcodeop pulse_device;
-define pcodeop nio;
-define pcodeop dia;
-define pcodeop dib;
-define pcodeop dic;
-define pcodeop doa;
-define pcodeop dob;
-define pcodeop doc;
-define pcodeop interrupts_on;
-define pcodeop interrupts_off;
-define pcodeop get_interrupt_flag;
-define pcodeop interrupts_ack;
-define pcodeop interrupts_setmask;
-define pcodeop ioreset;
+define pcodeop io_start;        # f = S: set Busy, clear Done of device
+define pcodeop io_clear;        # f = C: clear Busy and Done
+define pcodeop io_pulse;        # f = P: device-specific pulse
+define pcodeop io_busy;         # returns the device's Busy flag
+define pcodeop io_done;         # returns the device's Done flag
+define pcodeop io_in_a;         # DIA/DIB/DIC: read device buffer A/B/C
+define pcodeop io_in_b;
+define pcodeop io_in_c;
+define pcodeop io_out_a;        # DOA/DOB/DOC: write device buffer A/B/C
+define pcodeop io_out_b;
+define pcodeop io_out_c;
+define pcodeop interrupt_acknowledge;
+define pcodeop io_reset;
 define pcodeop rtc_enable;
 define pcodeop rtc_disable;
-define pcodeop read_console_switches;
-
 define pcodeop halt;
 
-# Include contents of skel.sinc file
 @include "micronova.sinc"

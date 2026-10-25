@@ -1,629 +1,319 @@
 # sleigh include file for Micronova language instructions
-
-# Formats:
-# 0 0 0 .....   No accumulator-Effective address
-# 0 x x .....   One accumulator-Effective address
-# 0 1 1 .....	IO
-# 1 .........	Two Accumulator-Multiple Operation but NOT ending 1000 which would be trap
-
-#The Micronova documentation numbers the bits within a 16 bit word "backwards" (MSB is #0, LSB is #15)
-#Here we use the conventional "#0 is LSB, #15 is MSB" scheme
+#
+# Formats (Data General numbers bits 0-15 from the MSB; this file numbers them 15-0 from the LSB):
+#   000 op @ idx disp       JMP JSR ISZ DSZ                 (no accumulator, memory reference)
+#   0 op ac @ idx disp      LDA (op=01) STA (op=10)         (one accumulator, memory reference)
+#   011 ac ioop ctl dev     NIO DIA DOA DIB DOB DIC DOC SKP  (I/O; device 01 = stack and MUL/DIV,
+#                                                             device 77 = CPU)
+#   1 acs acd aop sh cy # skip                              (two-accumulator arithmetic/logic)
+#   1 acs acd trap# 1000                                    (TRAP: no-load with "never skip")
+# Effective address: idx 0 = page zero (disp 0-255), 1 = PC + disp, 2 = AC2 + disp,
+# 3 = AC3 + disp (disp signed for idx 1-3), all modulo 2^15. @ = indirect: the word at the
+# address is the next address; its bit 15 (DG bit 0) requests another level. Locations 20-27
+# (octal) are incremented and 30-37 decremented before they are used as indirect pointers.
 
 define token instr(16)
-   #Bit 15 and 13-14 determine instruction type
-   bit_15     = (15,15)
-   bit_13_14     = (13,14)
-   
-   #Opcode bits for no accumulator-effective addres instructions  
-   opcode_0ac = (11,12)
-   
-   #Opcode bits for one accumulator-effective addres instructions  
-   opcode_1ac = (13,14)
-   
-   #Opcode bits for IO instructions
-   opcode_io = (8,10)
-   
-   #Opcode bits for two accumulator instructions  
-   opcode_2ac = (8,10)
-   
-   
-   #Control and device code bits for IO instructions
-   bits_control = (6,7)
-   bits_devcode = (0,5)
-   
-   #Bits for effective address calculations 
-   bits_indirect = (10,10)
-   bits_index = (8, 9)
-   bits_disp = (0,7) signed
-   bits_disp_abs = (0,7)
-   
-   #Accumulator for one accumulator instructions
-   ac = (11,12)
-   
-   #Source and destination accumuators for two accumulator instructions
-   acs = (13,14)
-   acd = (11,12)
-   
-   #Bits for "c sh # skip" for two accumulator instructions
-   bits_sh = (6,7)
-   bits_c = (4,5)
-   bits_store = (3,3)
-   bits_skip = (0,2)
-   
-   #Trap number for TRAP instruction
-   bits_trapno = (4,10)
-   
+	alc     = (15,15)
+	op3     = (13,15)
+	op2     = (11,12)
+	ac      = (11,12)
+	acs     = (13,14)
+	acd     = (11,12)
+	ind     = (10,10)
+	idx     = (8,9)
+	disp    = (0,7)
+	sdisp   = (0,7) signed
+	ioop    = (8,10)
+	ctl     = (6,7)
+	dev     = (0,5)
+	aop     = (8,10)
+	sh      = (6,7)
+	cy      = (4,5)
+	nl      = (3,3)
+	skip    = (0,2)
+	trapno  = (4,10)
 ;
 
 attach variables [ ac acs acd ] [ AC0 AC1 AC2 AC3 ];
 
-attach names [bits_devcode] [
-"DEV0"
-"MDV"
-"MMU"
-"MAP1"
-"HHC"
-"PROG"
-"MCAT"
-"MCAR"
-"TTI"
-"TTO"
-"PTR"
-"PTP"
-"RTC"
-"CDR"
-"LPT"
-"DSK"
-"ADCV"
-"MTA"
-"DACV"
-"DCM"
-"DEV20"
-"DEV21"
-"DEV22"
-"QTY"
-"SLA"
-"IBM1"
-"IBM2"
-"DKP"
-"CAS"
-"CRC"
-"IBP"
-"IVT"
-"DPI"
-"DPO"
-"DIO"
-"DIOT"
-"MXM"
-"DEV37"
-"MCAT1"
-"MCAR1"
-"TTI1"
-"TTO0"
-"PTR1"
-"PTP1"
-"RTC1"
-"PLT1"
-"CDR1"
-"LPT1"
-"DSK1"
-"ADCV1"
-"MTA1"
-"DACV1"
-"DEV52"
-"DEV53"
-"DEV54"
-"DEV55"
-"QTY1"
-"DEV57"
-"DEV58"
-"DKP1"
-"FPU1"
-"FPU2"
-"DEV62"
-"CPU"
-];
+# ---------------------------------------------------------------------------------------------
+# Effective address (word address, exported as a value)
+# ---------------------------------------------------------------------------------------------
 
-#IO flags and pulse
-f: ""		is bits_control=0 & bits_devcode {}
-f: "S"		is bits_control=1 & bits_devcode {start_device(bits_devcode:1);}
-f: "C"		is bits_control=2 & bits_devcode {idle_device(bits_devcode:1);}
-f: "P"		is bits_control=3 & bits_devcode {pulse_device(bits_devcode:1);}
-
-
-#CPU flags and pulse
-cpuf: ""		is bits_control=0 {}
-cpuf: "S"		is bits_control=1 {interrupts_on();}
-cpuf: "C"		is bits_control=2  {interrupts_off();}
-cpuf: "P"		is bits_control=3 {}
-
-
-#IO SKIP options
-t: "BN"		is bits_control=0 & bits_devcode	{iobusy = get_io_busy(bits_devcode:1); if (iobusy) goto inst_next2;}
-t: "BZ"		is bits_control=1 & bits_devcode	{iobusy = get_io_busy(bits_devcode:1); if (!iobusy) goto inst_next2;}
-t: "DN"		is bits_control=2 & bits_devcode	{ iodone = get_io_done(bits_devcode:1); if (iodone) goto inst_next2;}
-t: "DZ"		is bits_control=3 & bits_devcode	{iodone = get_io_done(bits_devcode:1); if (!iodone) goto inst_next2;}
-
-
-#CPU SKIP options
-cput: "BN"		is bits_control=0 & bits_devcode	{intflag = get_interrupt_flag(); if (intflag) goto inst_next2;}
-cput: "BZ"		is bits_control=1 & bits_devcode	{intflag = get_interrupt_flag(); if (!intflag) goto inst_next2;}
-cput: "DN"		is bits_control=2 & bits_devcode	{}
-cput: "DZ"		is bits_control=3 & bits_devcode	{}
-
-
-
-# "csh#" for 2 accumulator ins
-#Shifter carry initializer 
-c: ""        is bits_c=0x0                              {shiftercarry = cf;}
-c: "Z"       is bits_c=0x1                              {shiftercarry = 0;}
-c: "O"       is bits_c=0x2                              {shiftercarry = 1;}
-c: "C"       is bits_c=0x3                              {shiftercarry = cf ^ 1;}
-
-#Shifter operation
-sh: ""       is bits_sh=0x0                              {}
-sh: "L"      is bits_sh=0x1                              {tmp:1 = shiftercarry; shiftercarry = SHIFTER[15,1]; SHIFTER = SHIFTER << 1; SHIFTER[0,1] = tmp[0,1];}
-sh: "R"      is bits_sh=0x2                              {tmp:1 = shiftercarry; shiftercarry = SHIFTER[0,1]; SHIFTER = SHIFTER >> 1; SHIFTER[15,1] = tmp[0,1];}
-sh: "S"      is bits_sh=0x3                              {tmp:1 = SHIFTER[0,8]; SHIFTER[0,8] = SHIFTER[8,8]; SHIFTER[8,8] = tmp;}
-
-#Store flag
-stor: ""		is bits_store=0x0 & acd							{acd = SHIFTER; cf = shiftercarry;}
-stor: "#"		is bits_store=0x1							{}
-
-
-
-
-#Skip next instruction options
-skip: ""			is bits_skip = 0x0							{}
-skip: ",SKP"		is bits_skip = 0x1							{goto inst_next2;}
-skip: ",SZC"		is bits_skip = 0x2							{if (shiftercarry == 0) goto inst_next2;}
-skip: ",SNC"		is bits_skip = 0x3							{if (shiftercarry != 0) goto inst_next2;}
-skip: ",SZR"		is bits_skip = 0x4							{if (SHIFTER == 0) goto inst_next2;}
-skip: ",SNR"		is bits_skip = 0x5							{if (SHIFTER != 0) goto inst_next2;}
-skip: ",SEZ"		is bits_skip = 0x6							{if (SHIFTER == 0 || shiftercarry == 0) goto inst_next2;}
-skip: ",SBN"		is bits_skip = 0x7							{if (SHIFTER != 0 && shiftercarry != 0) goto inst_next2;}
-
-#Effective address calculations
-#Somebody somewhere must understand the intricacies of the Sleigh "export *" statement but that someone is not me
-
-#PC relative address, export as reference
-pcreladdr: reloc 			is bits_index=1 & bits_disp [ reloc=(inst_start + bits_disp) & 0x7FFF; ]					{export *:2 reloc;}
-
-#Absolute and register-relative address, export as value
-abs_regrel_addr: bits_disp_abs is bits_index=0 & bits_disp_abs {tmp:2 = bits_disp_abs; export tmp;}
-abs_regrel_addr: "AC2"^+bits_disp			is bits_index=2 & bits_disp					{tmp:2 = (bits_disp + AC2) & 0x7FFF; export tmp;}
-abs_regrel_addr: "AC3"^+bits_disp			is bits_index=3 & bits_disp					{tmp:2 = (bits_disp + AC3) & 0x7FFF; export tmp;}
-
-
-
-macro incdec(address)
-{
-	EFFADDRESS = address;
-	dst:2 = *EFFADDRESS;
-	#addr:2 =  EFFADDRESS;
+# Follow an indirect chain starting with the pointer at address a.
+# The first level is written out so that the usual single indirection through a constant
+# address decompiles without the loop.
+macro indirect(a) {
+	local blk:2 = a & 0x7ff8;
+	*[ram]:2 a = *[ram]:2 a + zext(blk == 0x10) - zext(blk == 0x18);
+	local p:2 = *[ram]:2 a;
+	a = p & 0x7fff;
+	if ((p & 0x8000) == 0) goto <done>;
 <loop>
-	chk:2 = EFFADDRESS & 0xFFF8;
-	if (chk == 0x10)
-		goto <autoinc>;
-	if (chk == 0x18)
-		goto <autodec>;
-		
-	<checknexind>
-	indcheck:1 = dst[15,1];
-	if (indcheck == 0) goto <done>;
-	
-	EFFADDRESS = dst & 0x7FFF;
-	dst = *EFFADDRESS;
-	goto <loop>;
-	
-	<autoinc>
-		dst = dst+1;
-		*EFFADDRESS = dst;
-		goto <checknexind>;
-	<autodec>
-		dst = dst-1;
-		*EFFADDRESS  = dst;
-		goto <checknexind>;
-		
-	<done>
+	blk = a & 0x7ff8;
+	*[ram]:2 a = *[ram]:2 a + zext(blk == 0x10) - zext(blk == 0x18);
+	p = *[ram]:2 a;
+	a = p & 0x7fff;
+	if ((p & 0x8000) != 0) goto <loop>;
+<done>
 }
 
-#Indirect
-ind_addr: "@"pcreladdr is pcreladdr & bits_indirect=1 
-{
-	incdec(pcreladdr);
-	tmp:2 = EFFADDRESS; 
-	export tmp;
-	
+Base: disp is idx=0 & disp { export *[const]:2 disp; }
+Base: tgt is idx=1 & sdisp [ tgt = (inst_start + sdisp) & 0x7fff; ] { export *[const]:2 tgt; }
+Base: sdisp,AC2 is idx=2 & sdisp & AC2 { local a:2 = (AC2 + sdisp) & 0x7fff; export a; }
+Base: sdisp,AC3 is idx=3 & sdisp & AC3 { local a:2 = (AC3 + sdisp) & 0x7fff; export a; }
+
+EA: Base is ind=0 & Base { export Base; }
+EA: "@"^Base is ind=1 & Base { local a:2 = Base; indirect(a); export a; }
+
+# Direct targets for flow (page zero or PC relative, not indirect)
+DTgt: disp is ind=0 & idx=0 & disp { export *[ram]:2 disp; }
+DTgt: tgt is ind=0 & idx=1 & sdisp [ tgt = (inst_start + sdisp) & 0x7fff; ] { export *[ram]:2 tgt; }
+
+# ---------------------------------------------------------------------------------------------
+# Memory reference
+# ---------------------------------------------------------------------------------------------
+
+:JMP DTgt is op3=0 & op2=0 & DTgt { goto DTgt; }
+:JMP EA is op3=0 & op2=0 & EA { goto [EA]; }
+# JMP 0,3 is the usual subroutine return (JSR leaves the return address in AC3)
+:JMP EA is op3=0 & op2=0 & ind=0 & idx=3 & disp=0 & EA { return [AC3]; }
+# The effective address is computed before AC3 receives the return address.
+# (inst_next in p-code is a byte offset in this word-addressed space, so the return address is
+# taken from the disassembly-time value, which is in words)
+NextW: ret is epsilon [ ret = inst_next; ] { export *[const]:2 ret; }
+HereW: here is epsilon [ here = inst_start; ] { export *[const]:2 here; }
+:JSR DTgt is op3=0 & op2=1 & DTgt & NextW { AC3 = NextW; call DTgt; }
+:JSR EA is op3=0 & op2=1 & EA & NextW { local t:2 = EA; AC3 = NextW; call [t]; }
+:ISZ EA is op3=0 & op2=2 & EA {
+	local a:2 = EA;
+	local v:2 = *[ram]:2 a + 1;
+	*[ram]:2 a = v;
+	if (v == 0) goto inst_next2;
+}
+:DSZ EA is op3=0 & op2=3 & EA {
+	local a:2 = EA;
+	local v:2 = *[ram]:2 a - 1;
+	*[ram]:2 a = v;
+	if (v == 0) goto inst_next2;
+}
+:LDA ac,EA is op3=1 & ac & EA { ac = *[ram]:2 EA; }
+:STA ac,EA is op3=2 & ac & EA { *[ram]:2 EA = ac; }
+
+# ---------------------------------------------------------------------------------------------
+# Two-accumulator arithmetic and logic
+#   carry base (cy): "" current carry, Z 0, O 1, C complement
+#   operation on ACS/ACD gives a 16-bit result; COM/NEG/INC/ADC/SUB/ADD complement the carry
+#   base on a carry out; shift (sh): L rotate left through carry, R rotate right, S swap bytes;
+#   "#" (no-load): neither ACD nor carry is changed; skip tests the shifted result and carry.
+# ---------------------------------------------------------------------------------------------
+
+Cy: ""  is cy=0 { local c:1 = C; export c; }
+Cy: "Z" is cy=1 { export 0:1; }
+Cy: "O" is cy=2 { export 1:1; }
+Cy: "C" is cy=3 { local c:1 = !C; export c; }
+Sh: ""  is sh=0 { }
+Sh: "L" is sh=1 { }
+Sh: "R" is sh=2 { }
+Sh: "S" is sh=3 { }
+NL: ""  is nl=0 { }
+NL: "#" is nl=1 { }
+Skip: ""     is skip=0 { }
+Skip: ",SKP" is skip=1 { }
+Skip: ",SZC" is skip=2 { }
+Skip: ",SNC" is skip=3 { }
+Skip: ",SZR" is skip=4 { }
+Skip: ",SNR" is skip=5 { }
+Skip: ",SEZ" is skip=6 { }
+Skip: ",SBN" is skip=7 { }
+
+# (no-load with "never skip" is TRAP, so the constructors exclude nl=1 & skip=0)
+# shift (sh), load unless no-load, then skip; r:2 result, k:1 carry
+macro finish(r, k, shf, nlf, skf, d) {
+	local res:2 = r; local cr:1 = k;
+	local shv:1 = shf; local nlv:1 = nlf; local skv:1 = skf;
+	if (shv == 0) goto <shifted>;
+	if (shv != 1) goto <notl>;
+	local outl:1 = res[15,1];
+	res = (res << 1) | zext(cr);
+	cr = outl;
+	goto <shifted>;
+<notl>
+	if (shv != 2) goto <swap>;
+	local outr:1 = res[0,1];
+	res = (res >> 1) | (zext(cr) << 15);
+	cr = outr;
+	goto <shifted>;
+<swap>
+	res = (res << 8) | (res >> 8);
+<shifted>
+	local doskip:1 = (skv == 1) || (skv == 2 && cr == 0) || (skv == 3 && cr != 0) ||
+	                 (skv == 4 && res == 0) || (skv == 5 && res != 0) ||
+	                 (skv == 6 && (cr == 0 || res == 0)) || (skv == 7 && cr != 0 && res != 0);
+	if (nlv == 1) goto <noload>;
+	d = res; C = cr;
+<noload>
+	if (doskip) goto inst_next2;
 }
 
-ind_addr: "@"abs_regrel_addr is abs_regrel_addr & bits_indirect=1 
-{
-	incdec(abs_regrel_addr);
-	tmp:2 = *EFFADDRESS;
-	export tmp;
-	
+:COM^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=0 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local r:2 = ~acs; local k:1 = Cy;
+	finish(r, k, sh, nl, skip, acd);
+}
+:NEG^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=1 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local s:2 = acs; local r:2 = -s; local k:1 = Cy ^ (s == 0);
+	finish(r, k, sh, nl, skip, acd);
+}
+:MOV^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=2 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local r:2 = acs; local k:1 = Cy;
+	finish(r, k, sh, nl, skip, acd);
+}
+:INC^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=3 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local s:2 = acs; local r:2 = s + 1; local k:1 = Cy ^ (s == 0xffff);
+	finish(r, k, sh, nl, skip, acd);
+}
+:ADC^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=4 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local s:2 = ~acs; local d:2 = acd; local r:2 = s + d; local k:1 = Cy ^ carry(s, d);
+	finish(r, k, sh, nl, skip, acd);
+}
+:SUB^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=5 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local s:2 = acs; local d:2 = acd; local r:2 = d - s; local k:1 = Cy ^ (s <= d);
+	finish(r, k, sh, nl, skip, acd);
+}
+:ADD^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=6 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local s:2 = acs; local d:2 = acd; local r:2 = s + d; local k:1 = Cy ^ carry(s, d);
+	finish(r, k, sh, nl, skip, acd);
+}
+:AND^Cy^Sh^NL acs,acd^Skip is alc=1 & aop=7 & (nl=0 | skip!=0) & Cy & Sh & NL & acs & acd & Skip & sh & nl & skip {
+	local r:2 = acs & acd; local k:1 = Cy;
+	finish(r, k, sh, nl, skip, acd);
 }
 
-#################################################################
-
-macro push(ac)
-{
-	SP= SP+1; 
-	*SP=ac;
+# TRAP (microNOVA): no-load with "never skip". The address of the TRAP is stored in location 46
+# (octal) with bit 15 clear, then a "jump indirect" through location 47 (octal). ACS, ACD and the
+# trap number are for the trap handler (it reads them from the stored instruction).
+:TRAP acs,acd,trapno is alc=1 & nl=1 & skip=0 & acs & acd & trapno & HereW {
+	*[ram]:2 0x26:2 = HereW & 0x7fff;
+	local a:2 = 0x27;
+	indirect(a);
+	call [a];
 }
 
-macro pop(ac)
-{
-	ac = *SP;
-	SP = SP - 1;
+# ---------------------------------------------------------------------------------------------
+# Input/output
+# ---------------------------------------------------------------------------------------------
+
+Dev: "MDV"  is dev=0x01 { export 0x01:1; }
+Dev: "HHC"  is dev=0x04 { export 0x04:1; }
+Dev: "PROG" is dev=0x05 { export 0x05:1; }
+Dev: "TTI"  is dev=0x08 { export 0x08:1; }
+Dev: "TTO"  is dev=0x09 { export 0x09:1; }
+Dev: "DKT2" is dev=0x18 { export 0x18:1; }
+Dev: "DKT"  is dev=0x1b { export 0x1b:1; }
+Dev: "TTI1" is dev=0x28 { export 0x28:1; }
+Dev: "TTO1" is dev=0x29 { export 0x29:1; }
+Dev: "DKT3" is dev=0x38 { export 0x38:1; }
+Dev: "DKT1" is dev=0x3b { export 0x3b:1; }
+Dev: dev    is dev { export *[const]:1 dev; }
+
+# Busy/Done control: S start, C clear, P pulse (the CPU device uses S/C for Interrupt On)
+F: ""  is ctl=0 { }
+F: "S" is ctl=1 & Dev { io_start(Dev); }
+F: "C" is ctl=2 & Dev { io_clear(Dev); }
+F: "P" is ctl=3 & Dev { io_pulse(Dev); }
+FC: ""  is ctl=0 { }
+FC: "S" is ctl=1 { ION = 1; }
+FC: "C" is ctl=2 { ION = 0; }
+FC: "P" is ctl=3 { }
+
+T: "BN" is ctl=0 & Dev { local t:1 = io_busy(Dev); export t; }
+T: "BZ" is ctl=1 & Dev { local b:1 = io_busy(Dev); local t:1 = !b; export t; }
+T: "DN" is ctl=2 & Dev { local t:1 = io_done(Dev); export t; }
+T: "DZ" is ctl=3 & Dev { local b:1 = io_done(Dev); local t:1 = !b; export t; }
+# CPU skip: BN/BZ test Interrupt On, DN never skips, DZ always skips
+TC: "BN" is ctl=0 { local t:1 = ION != 0; export t; }
+TC: "BZ" is ctl=1 { local t:1 = ION == 0; export t; }
+TC: "DN" is ctl=2 { export 0:1; }
+TC: "DZ" is ctl=3 { export 1:1; }
+
+# generic devices
+:NIO^F Dev     is op3=3 & ioop=0 & F & Dev                 { build F; }
+:DIA^F ac,Dev  is op3=3 & ioop=1 & F & Dev & ac            { ac = io_in_a(Dev); build F; }
+:DOA^F ac,Dev  is op3=3 & ioop=2 & F & Dev & ac            { io_out_a(Dev, ac); build F; }
+:DIB^F ac,Dev  is op3=3 & ioop=3 & F & Dev & ac            { ac = io_in_b(Dev); build F; }
+:DOB^F ac,Dev  is op3=3 & ioop=4 & F & Dev & ac            { io_out_b(Dev, ac); build F; }
+:DIC^F ac,Dev  is op3=3 & ioop=5 & F & Dev & ac            { ac = io_in_c(Dev); build F; }
+:DOC^F ac,Dev  is op3=3 & ioop=6 & F & Dev & ac            { io_out_c(Dev, ac); build F; }
+:SKP^T Dev     is op3=3 & ioop=7 & T & Dev                 { if (T) goto inst_next2; }
+
+
+# device 01: stack (microNOVA) and multiply/divide
+:PSHA ac  is op3=3 & ioop=3 & ctl=0 & dev=1 & ac           { SP = SP + 1; *[ram]:2 SP = ac; }
+:POPA ac  is op3=3 & ioop=3 & ctl=2 & dev=1 & ac           { ac = *[ram]:2 SP; SP = SP - 1; }
+:MTSP ac  is op3=3 & ioop=2 & ctl=0 & dev=1 & ac           { SP = ac & 0x7fff; }
+:MFSP ac  is op3=3 & ioop=2 & ctl=2 & dev=1 & ac           { ac = SP & 0x7fff; }
+:MTFP ac  is op3=3 & ioop=0 & ctl=0 & dev=1 & ac           { FP = ac & 0x7fff; }
+:MFFP ac  is op3=3 & ioop=0 & ctl=2 & dev=1 & ac           { ac = FP & 0x7fff; }
+# SAV pushes AC0, AC1, AC2, FP and (carry, AC3 bits 14-0); then FP and AC3 = SP
+:SAV      is op3=3 & ioop=5 & ctl=0 & dev=1 & ac=0 {
+	local w:2 = (zext(C) << 15) | (AC3 & 0x7fff);
+	local f:2 = FP;
+	SP = SP + 1; *[ram]:2 SP = AC0;
+	SP = SP + 1; *[ram]:2 SP = AC1;
+	SP = SP + 1; *[ram]:2 SP = AC2;
+	SP = SP + 1; *[ram]:2 SP = f;
+	SP = SP + 1; *[ram]:2 SP = w;
+	FP = SP; AC3 = SP;
+}
+# RET: SP = FP, then pop carry/PC, AC3, AC2, AC1, AC0
+:RET      is op3=3 & ioop=5 & ctl=2 & dev=1 & ac=0 {
+	SP = FP;
+	local w:2 = *[ram]:2 SP; SP = SP - 1;
+	AC3 = *[ram]:2 SP; SP = SP - 1;
+	AC2 = *[ram]:2 SP; SP = SP - 1;
+	AC1 = *[ram]:2 SP; SP = SP - 1;
+	AC0 = *[ram]:2 SP; SP = SP - 1;
+	C = w[15,1];
+	local t:2 = w & 0x7fff;
+	return [t];
+}
+# MUL: AC0:AC1 = AC1 * AC2 + AC0 (unsigned)
+:MUL      is op3=3 & ioop=6 & ctl=3 & dev=1 & ac=2 {
+	local p:4 = zext(AC1) * zext(AC2) + zext(AC0);
+	AC0 = p(2); AC1 = p:2;
+}
+# DIV: AC0:AC1 / AC2 -> quotient AC1, remainder AC0, carry 0; if AC0 >= AC2, carry 1 and nothing
+# else changes
+:DIV      is op3=3 & ioop=6 & ctl=1 & dev=1 & ac=2 {
+	if (AC0 >= AC2) goto <ovf>;
+	local n:4 = (zext(AC0) << 16) | zext(AC1);
+	local d:4 = zext(AC2);
+	local q:4 = n / d; local r:4 = n % d;
+	AC1 = q:2; AC0 = r:2; C = 0;
+	goto inst_next;
+<ovf>
+	C = 1;
 }
 
-#############################################################################################
-#No accumulator, effective address
-with noacc_eff: bit_15=0 & bit_13_14=0 {
-	:"JMP" abs_regrel_addr is opcode_0ac=0 & bits_indirect=0 & abs_regrel_addr 
-	{
-		goto [abs_regrel_addr];
-	}
-	
-	:"JMP" pcreladdr is opcode_0ac=0 & bits_indirect=0 & pcreladdr 
-	{
-		goto pcreladdr;
-	}
-	
-	:"JMP" ind_addr is opcode_0ac=0 & bits_indirect=1 & ind_addr 
-	{
-		goto [ind_addr];
-	}
-	
-	
-	#JMP AC3+0 is return
-	:"JMP" abs_regrel_addr is opcode_0ac=0 & bits_indirect=0 & bits_index=3 & abs_regrel_addr 
-	{
-		return[abs_regrel_addr];
-	}
-	
-	
-	:"JSR" abs_regrel_addr is opcode_0ac=1 & bits_indirect=0 & abs_regrel_addr
-	{
-		call [abs_regrel_addr];
-	}
-	
-	:"JSR" pcreladdr is opcode_0ac=1 & bits_indirect=0 & pcreladdr
-	{
-		call pcreladdr;
-	}
-	
-	:"JSR" ind_addr is opcode_0ac=1 & bits_indirect=1 & ind_addr
-	{
-		call [ind_addr];
-	}
-	
-	
-	:"ISZ" abs_regrel_addr is opcode_0ac=2 & bits_indirect=0 & abs_regrel_addr 
-	{
-		
-		local tmp:2 = *abs_regrel_addr;
-		tmp = tmp + 1;
-		*abs_regrel_addr = tmp;
-		
-		if (tmp == 0) goto inst_next2;		
-	}
-	
-	:"ISZ" pcreladdr is opcode_0ac=2 & bits_indirect=0 & pcreladdr 
-	{
-		
-		local tmp:2 = pcreladdr;
-		tmp = tmp + 1;
-		pcreladdr = tmp;
-		
-		if (tmp == 0) goto inst_next2;		
-	}
+# device 04: hand-held console. READS: the console switches register is read from location
+# 77577 (octal).
+:READS ac is op3=3 & ioop=1 & ctl=0 & dev=4 & ac { ac = *[ram]:2 0x7f7f:2; }
 
-
-	:"ISZ" ind_addr is opcode_0ac=2 & bits_indirect=1 & ind_addr 
-	{
-		
-		local tmp:2 = *ind_addr;
-		tmp = tmp + 1;
-		*ind_addr = tmp;
-		
-		if (tmp == 0) goto inst_next2;		
-	}	
-	
-	:"DSZ" abs_regrel_addr is opcode_0ac=3 & bits_indirect=0 & abs_regrel_addr
-	{
-		
-		local tmp:2 = *abs_regrel_addr;
-		tmp = tmp - 1;
-		*abs_regrel_addr = tmp;
-		
-		if (tmp == 0) goto inst_next2;		
-	}
-	
-	:"DSZ" pcreladdr is opcode_0ac=3 & bits_indirect=0 & pcreladdr
-	{
-		
-		local tmp:2 = pcreladdr;
-		tmp = tmp - 1;
-		pcreladdr = tmp;
-		
-		if (tmp == 0) goto inst_next2;		
-	}
-	
-	:"DSZ" ind_addr is opcode_0ac=3 & bits_indirect=1 & ind_addr
-	{
-		
-		local tmp:2 = *ind_addr;
-		tmp = tmp - 1;
-		*ind_addr = tmp;
-		
-		if (tmp == 0) goto inst_next2;		
-	}
-	
-}
-
-
-#############################################################################################
-
-#############################################################################################
-#One accumulator, effective address
-with oneacc_eff: bit_15=0 { 
-	:"LDA" ac,abs_regrel_addr is opcode_1ac=1 & bits_indirect=0 & ac & abs_regrel_addr
-	{
-		
-		ac = *abs_regrel_addr;		
-	}
-	
-	
-	:"LDA" ac,pcreladdr is opcode_1ac=1 & bits_indirect=0 & ac & pcreladdr
-	{
-		
-		ac = pcreladdr;		
-	}
-	
-	:"LDA" ac,ind_addr is opcode_1ac=1 & bits_indirect=1 & ac & ind_addr
-	{
-		
-		ac = *ind_addr;		
-	}
-	
-	:"STA" ac,abs_regrel_addr is opcode_1ac=2 & bits_indirect=0 & ac & abs_regrel_addr
-	{
-		*abs_regrel_addr = ac;
-	}
-	
-	:"STA" ac,pcreladdr is opcode_1ac=2 & bits_indirect=0 & ac & pcreladdr
-	{
-		pcreladdr = ac;
-	}
-	
-	:"STA" ac,ind_addr is opcode_1ac=2 & bits_indirect=1 & ac & ind_addr
-	{
-		*ind_addr = ac;
-	}
-	
-}
-
-#############################################################################################
-
-
-
-#############################################################################################
-#Two accumulator multiple op and TRAP
-with twoacc: bit_15 = 1 {
-	:"COM"^c^sh^stor acs,acd^skip is opcode_2ac=0 & c & sh & stor & acs & acd & skip 
-	{
-		build c;
-		SHIFTER = ~acs;
-		build sh;
-		build stor;
-		build skip;
-	}
-	
-	:"NEG"^c^sh^stor acs,acd^skip is opcode_2ac=1 & c & sh & stor & acs & acd & skip 
-	{
-		build c;
-		shiftercarry = shiftercarry ^ (acs == 0);
-		SHIFTER = -acs;
-		build sh;
-		build stor;
-		build skip;
-	}
-	
-	:"MOV"^c^sh^stor acs,acd^skip is opcode_2ac=2 & c & sh & stor & acs & acd & skip
-	{
-		build c;
-		SHIFTER = acs;
-		build sh;
-		build stor;
-		build skip;
-	}
-	
-	:"INC"^c^sh^stor acs,acd^skip is opcode_2ac=3 & c & sh & stor & acs & acd & skip
-	{
-		build c;
-		shiftercarry = shiftercarry ^  (acs == 0xFFFF);
-		SHIFTER = acs + 1;
-		build sh;
-		build stor;
-		build skip;
-	}
-	
-	:"ADC"^c^sh^stor acs,acd^skip is opcode_2ac=4 & c & sh & stor & acs & acd & skip
-	{
-		build c;
-		shiftercarry = shiftercarry ^ (acs < acd);
-		SHIFTER = ~acs + acd;
-		build sh;
-		build stor;
-		build skip;
-	}
-	
-	:"SUB"^c^sh^stor acs,acd^skip is opcode_2ac=5 & c & sh & stor & acs & acd & skip
-	{
-		build c;
-		shiftercarry = shiftercarry ^ (acs <= acd);
-		SHIFTER = acd - acs;
-		build sh;
-		build stor;
-		build skip;
-	}
-	
-	:"ADD"^c^sh^stor acs,acd^skip is opcode_2ac=6 & c & sh & stor & acs & acd & skip
-	{
-		build c;
-		shiftercarry = shiftercarry ^ carry(acs,acd);
-		SHIFTER = acs + acd;
-		build sh;
-		build stor;
-		build skip;
-	}
-	
-	:"AND"^c^sh^stor acs,acd^skip is opcode_2ac=7 & c & sh & stor & acs & acd & skip
-	{
-		build c;
-		SHIFTER = acs & acd;
-		build sh;
-		build stor;
-		build skip;
-	}
-	#If indirect is set and skip is "never", the instruction is TRAP
-	:"TRAP" is bits_skip = 0 & bits_indirect = 1 {}
-}
-
-#############################################################################################
-
-
-#############################################################################################
-#Generic IO (not CPU or Stack related)
-with iodevgen: bit_13_14=3 {
-	:"NIO"^f bits_devcode is opcode_io=0 & ac=0 & f & bits_devcode  {nio(bits_devcode:1); build f;}
-	:"DIA"^f ac,bits_devcode is opcode_io=1 & f & bits_devcode & ac {ac = dia(bits_devcode:1); build f;}
-	:"DIB"^f ac,bits_devcode is opcode_io=3 & f & bits_devcode & ac {ac = dib(bits_devcode:1); build f;}
-	:"DIC"^f ac,bits_devcode is opcode_io=5 & f & bits_devcode & ac {ac = dic(bits_devcode:1); build f;}
-	:"DOA"^f ac,bits_devcode is opcode_io=2 & f & bits_devcode & ac {doa(bits_devcode:1, ac); build f;}
-	:"DOB"^f ac,bits_devcode is opcode_io=4 & f & bits_devcode & ac {dob(bits_devcode:1, ac); build f;}
-	:"DOC"^f ac,bits_devcode is opcode_io=6 & f & bits_devcode & ac {doc(bits_devcode:1, ac); build f;}
-	:"SKP"^t bits_devcode is opcode_io=7 & ac=0 & t & bits_devcode {}
-}
-#############################################################################################
-
-#############################################################################################
-#IO device 1, stack related and DIV/MUL
-with iodev1: bits_devcode=1 {
-	:"PUSHA" ac is opcode_io=3 & bits_control=0 & ac {push(ac);}
-	:"POPA" ac is opcode_io=3 & bits_control=2 & ac {pop(ac);}
-	:"SAV" is opcode_io=5 & bits_control=0 & ac=0 
-	{
-		push(AC0);
-		push(AC1);
-		push(AC2);
-		push(FP);
-		tmp:2 = AC3;
-		tmp[15,1] = cf;
-		push(tmp);
-		AC3 = SP;
-		FP = SP;		
-	}
-	
-	:"MTSP" ac is opcode_io=2 & bits_control=0 & ac {SP = ac[0,15]; }
-	:"MTFP" ac is opcode_io=0 & bits_control=0 & ac {FP = ac[0,15];}
-	:"MFSP" ac is opcode_io=2 & bits_control=2 & ac {ac=SP;}
-	:"MFFP" ac is opcode_io=0 & bits_control=2 & ac {ac=FP;}
-	:"RET" is opcode_io=5 & bits_control=2 & ac=0 
-	{
-		SP = FP;
-		tmp:2 = 0; 
-		pop(tmp);
-		cf = tmp[15,1];
-		PC = tmp[0,15];
-		pop(AC3);
-		pop(AC2);
-		pop(AC1);
-		pop(AC0);
-		goto[PC];
-	}
-	:"DIV" is opcode_io=6 & bits_control=1 & ac=2 
-	{
-		if (AC0 >= AC2) goto <ovf>;
-		tmp:4 = 0; 
-		tmp[16,16] = AC0;
-		tmp[0,16] = AC1;
-		tmp2:4 = 0;
-		tmp2[0,16] = AC2;
-		div:4 = tmp / tmp2;
-		rem:4 = tmp % tmp2;
-		AC1 = div[0,16];
-		AC0 = rem[0,16];
-		cf = 0;
-		goto <done>;
-		<ovf>
-		cf = 1;
-		<done>
-	}
-	:"MUL" is opcode_io=6 & bits_control=3 & ac=2 
-	{
-		ac0_32:4 = 0;
-		ac1_32:4 = 0;
-		ac2_32:4 = 0;
-		ac0_32[0,16] = AC0;
-		ac1_32[0,16] = AC1;
-		ac2_32[0,16] = AC2; 
-		tmp:4 = ac1_32 * ac2_32;
-		tmp = tmp + ac0_32;
-		AC0 = tmp[16,16];
-		AC1 = tmp[0,16];
-	}
-	
-	#Fallback to standard io instruction
-	:iodevgen is opcode_io & ac & bits_control & iodevgen {}
-}
-#############################################################################################
-
-#############################################################################################
-#IO device 077, CPU
-with iodev077: bits_devcode=0x3F {
-	:"INTEN" cpuf is opcode_io=0 & ac=0 & bits_control=1 & cpuf {}
-	:"INTDS" is opcode_io=0 & ac=0 & bits_control=2 {}
-	:"INTA"^cpuf ac is opcode_io=3 & ac & bits_control=0 & cpuf {ac = interrupts_ack(); build cpuf;}
-	:"MSKO"^cpuf ac is opcode_io=4 & ac & bits_control=0 & cpuf {interrupts_setmask(ac);build cpuf;}
-	:"IORST" is opcode_io=2 & ac=0 & bits_control=2 & cpuf {ioreset(); build cpuf;}
-	:"HALT" is opcode_io=6 & ac=0 & bits_control=0  {halt();}
-	:"SKP"^cput bits_devcode is opcode_io=7 & ac=0 & cput & bits_devcode {}
-	:"RTCEN"^cpuf is opcode_io=2 & ac=2 & bits_control=0 & cpuf {rtc_enable(); build cpuf;}
-	:"RTCDS"^cpuf is opcode_io=2 & ac=1 & bits_control=0 & cpuf {rtc_disable(); build cpuf;}
-	
-	:"READS"^cpuf is opcode_io=1 & ac & bits_control=0 & cpuf {ac = read_console_switches(); build cpuf;}
-	
-	#Fallback to standard io instruction
-	:iodevgen is opcode_io & ac & bits_control & iodevgen {}
-}
-
-#############################################################################################
-
-#IO special device codes and generic
-with io: bit_15=0 & bit_13_14=3 {
-	:iodevgen is bits_devcode & iodevgen {}
-	:iodev1 is iodev1 {}
-	:iodev077 is iodev077 {}
-}
-
-
-# Formats:
-# 0 0 0 .....   No accumulator-Effective address
-# 0 x x .....   One accumulator-Effective address
-# 0 1 1 .....	IO
-# 1 .........	Two Accumulator-Multiple Operation but NOT ending 1000 which would be trap
-
-with noacc_1acc_io: bit_15=0 {
-	:noacc_eff is noacc_eff {}
-	:oneacc_eff is oneacc_eff {}
-	:io is io {}
-}
-
-#############################################################################################
-#Top level
-:^twoacc is  twoacc {} # 1 x x x .........
-:^noacc_1acc_io is noacc_1acc_io {} # 0 x x x ...........
+# device 77: CPU. Bits 8-9 (S/C) set or clear Interrupt On instead of Busy/Done.
+:INTEN    is op3=3 & ioop=0 & ctl=1 & dev=0x3f { ION = 1; }
+:INTDS    is op3=3 & ioop=0 & ctl=2 & dev=0x3f { ION = 0; }
+:NIO^FC "CPU" is op3=3 & ioop=0 & FC & dev=0x3f { build FC; }
+:INTA ac  is op3=3 & ioop=3 & ctl=0 & dev=0x3f & ac { ac = interrupt_acknowledge(); }
+:DIB^FC ac,"CPU" is op3=3 & ioop=3 & FC & dev=0x3f & ac { ac = interrupt_acknowledge(); build FC; }
+:MSKO ac  is op3=3 & ioop=4 & ctl=0 & dev=0x3f & ac { MASK = ac; }
+:DOB^FC ac,"CPU" is op3=3 & ioop=4 & FC & dev=0x3f & ac { MASK = ac; build FC; }
+:IORST^FC is op3=3 & ioop=2 & FC & dev=0x3f & ac=0 { io_reset(); MASK = 0; rtc_disable(); build FC; }
+:RTCDS^FC is op3=3 & ioop=2 & FC & dev=0x3f & ac=1 { rtc_disable(); build FC; }
+:RTCEN^FC is op3=3 & ioop=2 & FC & dev=0x3f & ac=2 { rtc_enable(); build FC; }
+:DOA^FC "AC3,CPU" is op3=3 & ioop=2 & FC & dev=0x3f & ac=3 { build FC; }
+# HALT (DOC 0,CPU; the accumulator and f are ignored) sets Interrupt On and stops until an
+# interrupt
+:HALT     is op3=3 & ioop=6 & dev=0x3f { ION = 1; halt(); }
+:DIA^FC ac,"CPU" is op3=3 & ioop=1 & FC & dev=0x3f & ac { ac = io_in_a(0x3f:1); build FC; }
+:DIC^FC ac,"CPU" is op3=3 & ioop=5 & FC & dev=0x3f & ac { ac = io_in_c(0x3f:1); build FC; }
+:SKP^TC "CPU" is op3=3 & ioop=7 & TC & dev=0x3f { if (TC) goto inst_next2; }
