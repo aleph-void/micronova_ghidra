@@ -3,3 +3,7 @@
 /.project
 /.settings
 /.gradle/
+*.sla
+build/
+lib/*.jar
+__pycache__/
